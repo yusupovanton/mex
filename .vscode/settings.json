@@ -1,0 +1,12 @@
+{
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "server": "localhost",
+            "driver": "PostgreSQL",
+            "connectString": "postgres://postgres:postgrespw@localhost:32768",
+            "name": "postgres-local",
+            "group": "local"
+        }
+    ]
+}

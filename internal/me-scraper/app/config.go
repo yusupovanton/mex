@@ -3,8 +3,9 @@ package app
 import (
 	"context"
 	"log"
+	"os"
 
-	"github.com/sethvargo/go-envconfig"
+	"github.com/kelseyhightower/envconfig"
 )
 
 type AppConfig struct {
@@ -20,7 +21,9 @@ func NewAppConfig(ctx context.Context) *AppConfig {
 	var err error
 	var dbconfig = DBConfig{}
 
-	err = envconfig.Process(ctx, &dbconfig)
+	log.Println(os.Getenv("DB_DSN_POSTGRES"))
+
+	err = envconfig.Process("", &dbconfig)
 
 	if err != nil {
 		log.Fatalf("Failed to process envs: %v", err)

@@ -2,52 +2,33 @@ package service
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/yusupovanton/moneyExchange/internal/me-scraper/app/dto"
 )
 
 type ScraperService struct {
-	db *sqlx.DB
+	db  *sqlx.DB
+	ctx context.Context
 }
 
-func NewScraperService(db *sqlx.DB) *ScraperService{
-	return &ScraperService{db: db}
-}
-
-func (s *ScraperService) ScrapeByBit() error {
-
-	log.Println("Started scraping Bybit.")
-	url := "https://www.bybit.com/fiat/trade/otc/?actionType=1&token=USDT&fiat=RUB&paymentMethod="
-	resp, err := http.Get(url)
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Could not get the bybit page: %v", err)
-		return err
-	} else if err != nil {
-		log.Printf("An unexpected error occured while scraping bybit: %v", err)
-		return err
+func NewScraperService(db *sqlx.DB, ctx context.Context) *ScraperService {
+	return &ScraperService{
+		db:  db,
+		ctx: ctx,
 	}
-
-	byteBody, err := io.ReadAll(resp.Body)
-
-	if err != nil {
-		log.Printf("Could not read body of response: %v", err)
-		return err
-	}
-
-	log.Printf("The response from ByBit website: %s", byteBody)
-
-	return nil
 }
 
-func ScrapeBinance() error {
+func (s *ScraperService) ScrapeBinance() error {
 
+	now := time.Now()
 	url := "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
 	method := "POST"
 	payload := strings.NewReader(`{"proMerchantAds":false,"page":1,"rows":10,"payTypes":["RaiffeisenBank"],"countries":[],"publisherType":null,"asset":"USDT","fiat":"RUB","tradeType":"BUY"}`)
@@ -90,11 +71,11 @@ func ScrapeBinance() error {
 	defer res.Body.Close()
 
 	reader, err := gzip.NewReader(res.Body)
-	defer reader.Close()
 	if err != nil {
 		log.Printf("Could not decompress body of response: %v", err)
 		return err
 	}
+	defer reader.Close()
 
 	body, err := io.ReadAll(reader)
 	if err != nil {
@@ -109,9 +90,68 @@ func ScrapeBinance() error {
 		return err
 	}
 
+	rowsToInsert := responseToRows(resp.Data, now)
+
+	err = s.insertToDb(s.ctx, rowsToInsert)
+
+	if err != nil {
+		log.Printf("Could not post data to db: %v", err)
+		return err
+	}
+
+	log.Println("Finished! Going to sleep for 10s")
+	time.Sleep(time.Second * 10)
+
 	return nil
 }
 
-func InsertToDb(db sqlx.DB) {
+func responseToRows(advArr []*dto.Adv, now time.Time) []*dto.BinanceDBRow {
 
+	var convertedRows = []*dto.BinanceDBRow{}
+
+	for _, adv := range advArr {
+		row := dto.BinanceDBRow{}
+
+		row.AdvNo = adv.AdInfo.AdvNo
+		row.Asset = adv.AdInfo.Asset
+		row.Price = adv.AdInfo.Price
+		row.UpdatedAt = now
+
+		convertedRows = append(convertedRows, &row)
+	}
+
+	return convertedRows
 }
+
+var queryInsert = `
+INSERT INTO public.me_active_ads(
+	adv_no,
+	asset, 
+	price,
+	updated_at
+) VALUES (
+	:adv_no, 
+	:asset,
+	:price,
+	:updated_at
+) ON CONFLICT 
+	(adv_no)
+DO UPDATE SET
+	asset = EXCLUDED.asset,
+	price = EXCLUDED.price,
+	updated_at = EXCLUDED.updated_at
+`
+
+func (s *ScraperService) insertToDb(ctx context.Context, rowsarr []*dto.BinanceDBRow) error {
+
+	_, err := s.db.NamedExecContext(ctx, queryInsert, rowsarr)
+
+	if err != nil {
+		log.Printf("An error occured while executing query: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+// Tinkoff add + field add to the db

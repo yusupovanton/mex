@@ -1,17 +1,18 @@
 package dto
 
+import "time"
+
 type BinanceResponse struct {
 	Code          string      `json:"code"`
 	Message       interface{} `json:"message"`
 	MessageDetail interface{} `json:"messageDetail"`
-	Data          []Adv       `json:"data"`
+	Data          []*Adv      `json:"data"`
 	Total         int         `json:"total"`
 	Success       bool        `json:"success"`
 }
 
 type Adv struct {
-	AdInfo         Advertisement `json:"adv"`
-	AdvertiserInfo Advertiser    `json:"advertiser"`
+	AdInfo Advertisement `json:"adv"`
 }
 
 type Advertiser struct {
@@ -39,14 +40,21 @@ type Advertisement struct {
 	AdvNo              string      `json:"advNo"`
 	Classify           string      `json:"classify"`
 	TradeType          string      `json:"tradeType"`
-	Asset              string      `json:"asset"`
+	Asset              string      `json:"asset" db:"asset"`
 	FiatUnit           string      `json:"fiatUnit"`
 	AdvStatus          interface{} `json:"advStatus"`
 	PriceType          interface{} `json:"priceType"`
 	PriceFloatingRatio interface{} `json:"priceFloatingRatio"`
 	RateFloatingRatio  interface{} `json:"rateFloatingRatio"`
 	CurrencyRate       interface{} `json:"currencyRate"`
-	Price              string      `json:"price"`
+	Price              string      `json:"price" db:"price"`
 	InitAmount         interface{} `json:"initAmount"`
 	SurplusAmount      string      `json:"surplusAmount"`
+}
+
+type BinanceDBRow struct {
+	AdvNo     string    `db:"adv_no"`
+	Asset     string    `db:"asset"`
+	Price     string    `db:"price"`
+	UpdatedAt time.Time `db:"updated_at"`
 }

@@ -34,23 +34,47 @@ func New(ctx context.Context, config *AppConfig) *application {
 
 	newApp.initDB(newApp.config.DBConfig)
 
-	newApp.service = service.NewScraperService(newApp.db)
-
+	newApp.service = service.NewScraperService(newApp.db, newApp.ctx)
+	newApp.initParser()
 	return &newApp
 }
 
-func (app *application) initDB(cfg *DBConfig) {
+func (app *application) initParser() {
+
+	app.RegisterBackgroundJob(func() error {
+		for {
+			if err := app.service.ScrapeBinance(); err != nil {
+				return err
+			}
+		}
+	})
+
+}
+
+func (app *application) initDB(cfg *DBConfig) error {
 
 	var err error
 
 	app.db, err = sqlx.Open("postgres", cfg.DSN)
+	log.Println(cfg.DSN)
+	if err != nil {
+		log.Fatalf("There was an error connecting to db: %v", err)
+		return err
+	}
 
+	err = app.db.Ping()
+	if err != nil {
+		log.Fatalf("Could not ping db: %v", err)
+		return err
+	}
 	app.RegisterStopHandler(func() {
 		err = app.db.Close()
 		if err != nil {
 			log.Printf("Unable close db connection: %v", err)
 		}
 	})
+
+	return nil
 
 }
 

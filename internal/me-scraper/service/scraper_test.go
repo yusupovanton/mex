@@ -11,9 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/yusupovanton/moneyExchange/internal/me-scraper/app/dto"
 
 	"github.com/gocolly/colly"
+	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,5 +126,14 @@ func TestScrapesBinance(t *testing.T) {
 	require.NoError(t, err)
 
 	log.Printf("%+v\n", resp)
+
+}
+
+func TestDB(t *testing.T) {
+
+	db, err := sqlx.Open("postgres", "postgres://postgres:postgrespw@localhost:32768?sslmode=disable")
+	require.NoError(t, err)
+	err = db.Ping()
+	require.NoError(t, err)
 
 }

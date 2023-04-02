@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -11,33 +12,47 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
+	"github.com/samber/lo"
 	"github.com/yusupovanton/moneyExchange/internal/me-scraper/app/dto"
 )
 
 type ScraperService struct {
-	db  *sqlx.DB
-	ctx context.Context
+	db     *sqlx.DB
+	ctx    context.Context
+	br     *request
+	client *http.Client
+	ri     *runInfo
+}
+
+type runInfo struct {
+	CurrentTime time.Time
 }
 
 func NewScraperService(db *sqlx.DB, ctx context.Context) *ScraperService {
+
+	br := request{
+		url:    "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search",
+		method: "POST",
+	}
+
 	return &ScraperService{
-		db:  db,
-		ctx: ctx,
+		db:     db,
+		ctx:    ctx,
+		br:     &br,
+		client: &http.Client{},
+		ri:     &runInfo{},
 	}
 }
 
-func (s *ScraperService) ScrapeBinance() error {
+func (s *ScraperService) binanceRequest(paymentType string) ([]*dto.BinanceRow, error) {
 
-	now := time.Now()
-	url := "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-	method := "POST"
-	payload := strings.NewReader(`{"proMerchantAds":false,"page":1,"rows":10,"payTypes":["RaiffeisenBank"],"countries":[],"publisherType":null,"asset":"USDT","fiat":"RUB","tradeType":"BUY"}`)
-	client := &http.Client{}
-	req, err := http.NewRequest(method, url, payload)
+	payload := strings.NewReader(fmt.Sprintf(`{"proMerchantAds":false,"page":1,"rows":10,"payTypes":["%v"],"countries":[],"publisherType":null,"asset":"USDT","fiat":"RUB","tradeType":"BUY"}`, paymentType))
+	req, err := http.NewRequest(s.br.method, s.br.url, payload)
 
 	if err != nil {
 		log.Printf("Could not create request: %v", err)
-		return err
+		return nil, err
 	}
 
 	req.Header.Add("Referer", "https://p2p.binance.com/en/trade/RaiffeisenBank/USDT?fiat=RUB")
@@ -61,11 +76,11 @@ func (s *ScraperService) ScrapeBinance() error {
 	req.Header.Add("c2ctype", "c2c_merchant")
 	req.Header.Add("csrftoken", "d41d8cd98f00b204e9800998ecf8427e")
 
-	res, err := client.Do(req)
+	res, err := s.client.Do(req)
 
 	if err != nil {
 		log.Printf("Could not send the request: %v", err)
-		return err
+		return nil, err
 	}
 
 	defer res.Body.Close()
@@ -73,49 +88,97 @@ func (s *ScraperService) ScrapeBinance() error {
 	reader, err := gzip.NewReader(res.Body)
 	if err != nil {
 		log.Printf("Could not decompress body of response: %v", err)
-		return err
+		return nil, err
 	}
 	defer reader.Close()
 
 	body, err := io.ReadAll(reader)
 	if err != nil {
 		log.Printf("Could not read body of response: %v", err)
-		return err
+		return nil, err
 	}
 
 	resp := dto.BinanceResponse{}
 	err = json.Unmarshal(body, &resp)
 	if err != nil {
 		log.Printf("Could not unmarshall body of response to structs: %v", err)
-		return err
+		return nil, err
 	}
 
-	rowsToInsert := responseToRows(resp.Data, now)
+	rows := responseToRows(resp.Data, s.ri.CurrentTime)
+
+	log.Printf("Finished with %v! Number of ads is %d", paymentType, len(rows))
+	time.Sleep(time.Second * 2)
+
+	return rows, nil
+}
+
+type request struct {
+	url    string
+	method string
+	client *http.Client
+}
+
+func (s *ScraperService) ScrapeBinance() error {
+
+	s.ri.CurrentTime = time.Now()
+
+	paymentTypes := []string{"RaiffeisenBank", "TinkoffNew", "RUBfiatbalance"}
+	rowsToInsert := []*dto.BinanceRow{}
+	var err error
+
+	for _, paymentType := range paymentTypes {
+		rows, err := s.binanceRequest(paymentType)
+
+		if err != nil {
+			log.Printf("There has been an error sending a request for payment type %v: %v", paymentType, err)
+		}
+
+		rowsToInsert = append(rowsToInsert, rows...)
+	}
+
+	rowsToInsert = lo.Uniq(rowsToInsert)
 
 	err = s.insertToDb(s.ctx, rowsToInsert)
 
 	if err != nil {
+		log.Println(rowsToInsert)
 		log.Printf("Could not post data to db: %v", err)
 		return err
 	}
 
-	log.Println("Finished! Going to sleep for 10s")
-	time.Sleep(time.Second * 10)
+	err = s.outdateRows(s.ctx, s.ri.CurrentTime)
+
+	if err != nil {
+		log.Printf("Could not outdate rows: %v", err)
+		return err
+	}
 
 	return nil
 }
 
-func responseToRows(advArr []*dto.Adv, now time.Time) []*dto.BinanceDBRow {
+func responseToRows(advArr []*dto.BinanceAdv, now time.Time) []*dto.BinanceRow {
 
-	var convertedRows = []*dto.BinanceDBRow{}
+	var convertedRows = []*dto.BinanceRow{}
 
 	for _, adv := range advArr {
-		row := dto.BinanceDBRow{}
+		paymentTypes := []string{}
+
+		for _, pt := range adv.AdInfo.TradeMethods {
+			tradeMethodName := pt.TradeMethodName
+			paymentTypes = append(paymentTypes, tradeMethodName)
+		}
+
+		arrayToInsert := pq.StringArray(paymentTypes)
+
+		row := dto.BinanceRow{}
 
 		row.AdvNo = adv.AdInfo.AdvNo
 		row.Asset = adv.AdInfo.Asset
 		row.Price = adv.AdInfo.Price
+		row.ExchangeName = "Binance"
 		row.UpdatedAt = now
+		row.PaymentTypes = arrayToInsert
 
 		convertedRows = append(convertedRows, &row)
 	}
@@ -128,21 +191,28 @@ INSERT INTO public.me_active_ads(
 	adv_no,
 	asset, 
 	price,
+	exchange_name,
+	payment_type,
 	updated_at
 ) VALUES (
 	:adv_no, 
 	:asset,
 	:price,
+	:exchange_name,
+	:payment_type,
 	:updated_at
 ) ON CONFLICT 
 	(adv_no)
 DO UPDATE SET
 	asset = EXCLUDED.asset,
+	payment_type = EXCLUDED.payment_type,
+	exchange_name = EXCLUDED.exchange_name,
 	price = EXCLUDED.price,
-	updated_at = EXCLUDED.updated_at
+	updated_at = EXCLUDED.updated_at,
+	is_outdated = false
 `
 
-func (s *ScraperService) insertToDb(ctx context.Context, rowsarr []*dto.BinanceDBRow) error {
+func (s *ScraperService) insertToDb(ctx context.Context, rowsarr []*dto.BinanceRow) error {
 
 	_, err := s.db.NamedExecContext(ctx, queryInsert, rowsarr)
 
@@ -154,4 +224,19 @@ func (s *ScraperService) insertToDb(ctx context.Context, rowsarr []*dto.BinanceD
 	return nil
 }
 
-// Tinkoff add + field add to the db
+const queryOutdate = `
+UPDATE public.me_active_ads 
+SET is_outdated = true 
+WHERE updated_at <> $1;
+`
+
+func (s *ScraperService) outdateRows(ctx context.Context, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, queryOutdate, now)
+
+	if err != nil {
+		log.Printf("An error occured while executing query: %v", err)
+		return err
+	}
+
+	return nil
+}

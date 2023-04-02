@@ -131,7 +131,7 @@ func TestScrapesBinance(t *testing.T) {
 
 func TestDB(t *testing.T) {
 
-	db, err := sqlx.Open("postgres", "postgres://postgres:postgrespw@localhost:32768?sslmode=disable")
+	db, err := sqlx.Open("postgres", "postgres://buildbus:buildbus@localhost:5432?sslmode=disable")
 	require.NoError(t, err)
 	err = db.Ping()
 	require.NoError(t, err)

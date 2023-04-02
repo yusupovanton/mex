@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -46,6 +47,8 @@ func (app *application) initParser() {
 			if err := app.service.ScrapeBinance(); err != nil {
 				return err
 			}
+			log.Println("Going to sleep for 10 s")
+			time.Sleep(time.Second * 10)
 		}
 	})
 

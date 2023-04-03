@@ -3,9 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"io/ioutil"
+	"io"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/yusupovanton/moneyExchange/internal/me-fiater/app/dto"
@@ -24,37 +25,81 @@ func NewFiaterService(db *sqlx.DB, ctx context.Context) *FiaterService {
 	}
 }
 
-func (s *FiaterService) GetFiatConversionRates() {
-	url := "https://api.apilayer.com/fixer/latest?base=RUB&symbols=USD,TRY"
+func (s *FiaterService) GetFiatConversionRates() error {
+	url := "https://api.apilayer.com/exchangerates_data/latest?base=RUB&symbols=USD,EUR,TRY"
 	method := "GET"
 
 	client := &http.Client{}
 	req, err := http.NewRequest(method, url, nil)
 
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
+
 	req.Header.Add("apikey", "x7qU0fh3Vhr24wDoB0pGhjT8XceaDGaL")
 
 	res, err := client.Do(req)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 	defer res.Body.Close()
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 
-	err = json.Unmarshal(body, &dto.CurrencyExchangeRate{})
+	jsonRes := &dto.CurrencyExchangeRate{}
+
+	err = json.Unmarshal(body, jsonRes)
 
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
+	}
+	row := s.resultToRow(jsonRes)
+	s.postResultToDb(s.ctx, row)
+	return err
+}
+
+func (s *FiaterService) resultToRow(resJson *dto.CurrencyExchangeRate) *dto.CurrencyDBRow {
+
+	euro := resJson.Rates["EUR"]
+	dollar := resJson.Rates["USD"]
+	lira := resJson.Rates["TRY"]
+
+	return &dto.CurrencyDBRow{
+		Ts:          time.Unix(resJson.Timestamp, 0),
+		Base:        resJson.Base,
+		Euro:        euro,
+		UsDollar:    dollar,
+		TurkishLira: lira,
+	}
+}
+
+const queryInsert = `
+INSERT INTO public.me_fiat_conversion_rates(
+	base,
+	us_dollar,
+	euro,
+	turkish_lira,
+	ts
+) VALUES (
+	:base,
+	:us_dollar,
+	:euro,
+	:turkish_lira,
+	:ts
+);
+`
+
+func (s *FiaterService) postResultToDb(ctx context.Context, row *dto.CurrencyDBRow) error {
+
+	_, err := s.db.NamedExecContext(ctx, queryInsert, row)
+
+	if err != nil {
+		log.Printf("An error occured while executing query: %v", err)
+		return err
 	}
 
+	return nil
 }

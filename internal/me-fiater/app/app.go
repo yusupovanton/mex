@@ -42,7 +42,7 @@ func New(ctx context.Context, config *AppConfig) *application {
 func (app *application) initParser() {
 
 	app.RegisterBackgroundJob(func() error {
-		log.Println("Hello from fiater!")
+		app.service.GetFiatConversionRates()
 		return nil
 	})
 
